@@ -1,10 +1,10 @@
 #!/usr/bin/python
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-from tabulate import tabulate
 from collections import deque
+
+import matplotlib.pyplot as plt
+import numpy as np
+from tabulate import tabulate
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
     solver.stand_value()
     solver.optimal_policy()
 
-    log(solver, print_ops)
+    solver.log(print_ops)
     return
 
 
@@ -226,87 +226,86 @@ class DP_solver:
                     self.EV[h, dealer_card] = np.nan
         return
 
+    def log(self, ops):
 
-def log(solver, ops):
+        cond1 = np.logical_not(np.all(self.policy, axis=-1))
+        cond2 = False
+        for t in ops["totals"]:
+            cond2 = np.logical_or(cond2, self.N_cards_in_hand == t)
+        inds = np.nonzero(np.logical_and(cond1, cond2))
 
-    cond1 = np.logical_not(np.all(solver.policy, axis=-1))
-    cond2 = False
-    for t in ops["totals"]:
-        cond2 = np.logical_or(cond2, solver.N_cards_in_hand == t)
-    inds = np.nonzero(np.logical_and(cond1, cond2))
+        charmap = {i: str(i + 1) for i in range(self.N_card_types)}
+        charmap[9] = "K"
+        charmap[0] = "A"
 
-    charmap = {i: str(i + 1) for i in range(solver.N_card_types)}
-    charmap[9] = "K"
-    charmap[0] = "A"
+        hands = self.hands[inds]
+        hands = [
+            ["".join([charmap[i] * c for i, c in enumerate(hand) if c])]
+            for hand in hands
+        ]
+        headers = ["hand"] + [charmap[i] for i in range(self.N_card_types)]
 
-    hands = solver.hands[inds]
-    hands = [
-        ["".join([charmap[i] * c for i, c in enumerate(hand) if c])]
-        for hand in hands
-    ]
-    headers = ["hand"] + [charmap[i] for i in range(solver.N_card_types)]
+        def Tabulate(arr):
+            return tabulate(
+                [hands[i] + k for i, k in enumerate(arr)],
+                headers=headers,
+                floatfmt=ops["floatfmt"],
+            )
 
-    def Tabulate(arr):
-        return tabulate(
-            [hands[i] + k for i, k in enumerate(arr)],
-            headers=headers,
-            floatfmt=ops["floatfmt"],
-        )
+        if ops["dealer_stand_prob"][0]:
+            target = ops["dealer_stand_prob"][1]
+            prob_dealer = self.prob_dealer_stand_at[inds]
+            prob_dealer = (
+                prob_dealer[:, :, target - self.dealer_target]
+                .astype(float)
+                .tolist()
+            )
+            print(
+                f"Dealer prob to stand at {target} (player hand vs. dealer card)"
+            )
+            print(Tabulate(prob_dealer))
 
-    if ops["dealer_stand_prob"][0]:
-        target = ops["dealer_stand_prob"][1]
-        prob_dealer = solver.prob_dealer_stand_at[inds]
-        prob_dealer = (
-            prob_dealer[:, :, target - solver.dealer_target]
-            .astype(float)
-            .tolist()
-        )
-        print(
-            f"Dealer prob to stand at {target} (player hand vs. dealer card)"
-        )
-        print(Tabulate(prob_dealer))
+        if ops["stand_win_prob"]:
+            prob = self.prob_if_stand["win"][inds].astype(float).tolist()
+            print("\nWin Probability if stand (player hand vs. dealer card)")
+            print(Tabulate(prob))
 
-    if ops["stand_win_prob"]:
-        prob = solver.prob_if_stand["win"][inds].astype(float).tolist()
-        print("\nWin Probability if stand (player hand vs. dealer card)")
-        print(Tabulate(prob))
+        if ops["optimal_policy"]:
+            pol = self.policy[inds].astype(int).tolist()
+            print("\nOptimal Policy (player hand vs. dealer card)")
+            print("1=Hit  0=Stand")
+            print(Tabulate(pol))
 
-    if ops["optimal_policy"]:
-        pol = solver.policy[inds].astype(int).tolist()
-        print("\nOptimal Policy (player hand vs. dealer card)")
-        print("1=Hit  0=Stand")
-        print(Tabulate(pol))
+        game_EV = (self.EV[0] @ self.deck) / self.N_cards_in_deck
+        print("\nGame EV:", game_EV)
 
-    game_EV = (solver.EV[0] @ solver.deck) / solver.N_cards_in_deck
-    print("\nGame EV:", game_EV)
+        if ops["plot"]:
+            strmap = {0: "S", 1: "H"}
+            clrmap = {0: "black", 1: "white"}
+            fig, ax = plt.subplots(1, 1, figsize=(4, 8))
+            ax.imshow(self.policy[inds], cmap="binary")
 
-    if ops["plot"]:
-        strmap = {0: "S", 1: "H"}
-        clrmap = {0: "black", 1: "white"}
-        fig, ax = plt.subplots(1, 1, figsize=(4, 8))
-        ax.imshow(solver.policy[inds], cmap="binary")
+            ax.set_title("Optimal Policy (Hit or Stand?)")
+            ax.set_xlabel("Dealer Card")
+            ax.set_ylabel("Player Hand")
+            ax.set_xticks(np.arange(self.N_card_types))
+            ax.set_yticks(np.arange(len(hands)))
+            ax.set_xticklabels(headers[1:])
+            ax.set_yticklabels([hand[0] for hand in hands])
+            for i in range(self.N_card_types):
+                for j in range(len(hands)):
+                    ax.text(
+                        i,
+                        j,
+                        strmap[self.policy[inds][j, i]],
+                        ha="center",
+                        va="center",
+                        color=clrmap[self.policy[inds][j, i]],
+                    )
 
-        ax.set_title("Optimal Policy (Hit or Stand?)")
-        ax.set_xlabel("Dealer Card")
-        ax.set_ylabel("Player Hand")
-        ax.set_xticks(np.arange(solver.N_card_types))
-        ax.set_yticks(np.arange(len(hands)))
-        ax.set_xticklabels(headers[1:])
-        ax.set_yticklabels([hand[0] for hand in hands])
-        for i in range(solver.N_card_types):
-            for j in range(len(hands)):
-                ax.text(
-                    i,
-                    j,
-                    strmap[solver.policy[inds][j, i]],
-                    ha="center",
-                    va="center",
-                    color=clrmap[solver.policy[inds][j, i]],
-                )
+            fig.savefig("optimal_policy.png")
 
-        fig.savefig("optimal_policy.png")
-
-    return
+        return
 
 
 main()

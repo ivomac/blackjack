@@ -14,6 +14,7 @@ The dealer always stands on reaching soft score $T$.
 
 - Add double down
 - Add surrender
+- Add split
 - Add option for dealer to peek for blackjack
 - Add option for dealer to hit at soft 17
 
