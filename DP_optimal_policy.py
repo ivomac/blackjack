@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-from collections import deque
+from collections import deque, namedtuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,8 +27,8 @@ def main():
 
     solver = DP_solver(**ops)
     solver.valid_hands()
-    solver.scores()
-    solver.dealer_paths_to_hand()
+    solver.hands.get_scores(solver.blackjack, solver.ace_plus)
+    solver.hands.get_dealer_paths(solver.dealer_target)
     solver.dealer_stand_probability()
     solver.stand_value()
     solver.optimal_policy()
@@ -37,26 +37,12 @@ def main():
     return
 
 
-class Deck(np.ndarray):
-    def __new__(cls, deck):
-        instance = np.array(deck, dtype=np.uint8).view(cls)
-        instance.sum = np.sum(instance)
-        instance.len = len(instance)
-        return instance
-
-
 class DP_solver:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
         self.deck = Deck(self.deck)
         for p in (
-            "hands",
-            "N_hands",
-            "N_cards_in_hand",
-            "T",
-            "hand_scores",
-            "N_paths_to_hand",
             "prob_dealer_stand_at",
             "prob_if_stand",
             "policy",
@@ -65,7 +51,7 @@ class DP_solver:
             setattr(self, p, None)
 
     def valid_hands(self):
-        T = dict()
+        futures = dict()
         q = deque()
 
         empty_hand = np.zeros(self.deck.len, dtype=np.uint8)
@@ -73,64 +59,34 @@ class DP_solver:
         while q:
             hand, min_score = q.popleft()
             t_hand = tuple(hand)
-            if t_hand in T:
+            if t_hand in futures:
                 continue
-            T[t_hand] = []
+            futures[t_hand] = []
             card = 0
             min_score += 1
             while card < self.deck.len and min_score <= self.blackjack:
                 if hand[card] < self.deck[card]:
                     hand[card] += 1
-                    T[t_hand].append((tuple(hand), card))
+                    futures[t_hand].append((tuple(hand), card))
                     q.append((hand.copy(), min_score))
                     hand[card] -= 1
                 card += 1
                 min_score += 1
-        hands = sorted(T.keys(), key=lambda x: sum(x))
-        htoi = {h: i for i, h in enumerate(hands)}
-        self.T = [
-            [(htoi[dest], card) for dest, card in T[hand]] for hand in hands
-        ]
-        self.hands = np.array(hands, dtype=np.uint8)
-        self.N_hands = len(self.hands)
-        self.N_cards_in_hand = np.sum(self.hands, axis=-1, dtype=np.uint8)
-        return
-
-    def scores(self):
-        card_vals = np.arange(1, self.deck.len + 1, dtype=np.uint8)
-        V = self.hands @ card_vals
-        Vp = V + self.ace_plus
-        self.hand_scores = np.where(
-            np.logical_and(self.hands[:, 0], Vp <= self.blackjack), Vp, V
-        )
-        return
-
-    def dealer_paths_to_hand(self):
-        self.N_paths_to_hand = np.zeros(
-            (self.N_hands, self.deck.len), dtype=np.uint8
-        )
-        for nxt, card in self.T[0]:
-            self.N_paths_to_hand[nxt, card] = 1
-
-        for h in range(1, self.N_hands):
-            if self.hand_scores[h] >= self.dealer_target:
-                continue
-            for nxt, _ in self.T[h]:
-                self.N_paths_to_hand[nxt] += self.N_paths_to_hand[h]
+        self.hands = Hands(futures)
         return
 
     def dealer_stand_probability(self):
         deck_left_for_dealer = self.deck - self.hands
         stand_scores = self.blackjack - self.dealer_target + 1
         self.prob_dealer_stand_at = np.zeros(
-            (self.N_hands, self.deck.len, stand_scores)
+            (self.hands.len, self.deck.len, stand_scores)
         )
         valid_dealer_hands = np.logical_and(
-            np.any(self.N_paths_to_hand, axis=-1),
-            self.hand_scores >= self.dealer_target,
+            np.any(self.hands.dealer_paths, axis=-1),
+            self.hands.scores >= self.dealer_target,
         ).nonzero()[0]
         for h in valid_dealer_hands:
-            N_cards_left_for_dealer = self.deck.sum - self.N_cards_in_hand - 1
+            N_cards_left_for_dealer = self.deck.sum - self.hands.sum - 1
             cards_to_draw = np.nonzero(self.hands[h])[0]
             denominator = np.where(
                 np.all(deck_left_for_dealer >= self.hands[h], axis=-1),
@@ -138,7 +94,7 @@ class DP_solver:
                 / np.prod(
                     [
                         N_cards_left_for_dealer - i
-                        for i in range(self.N_cards_in_hand[h] - 1)
+                        for i in range(self.hands.sum[h] - 1)
                     ],
                     axis=0,
                     dtype=float,
@@ -146,8 +102,8 @@ class DP_solver:
                 0,
             )
             prob = np.tile(
-                self.N_paths_to_hand[h].astype(float),
-                (self.N_hands, 1),
+                self.hands.dealer_paths[h].astype(float),
+                (self.hands.len, 1),
             )
             for fc in cards_to_draw:
                 prob[:, fc] *= (
@@ -163,13 +119,13 @@ class DP_solver:
                     * denominator
                 )
             self.prob_dealer_stand_at[
-                :, :, self.hand_scores[h] - self.dealer_target
+                :, :, self.hands.scores[h] - self.dealer_target
             ] += prob
         return
 
     def stand_value(self):
         self.prob_if_stand = np.zeros(
-            (self.N_hands, self.deck.len),
+            (self.hands.len, self.deck.len),
             dtype=[
                 ("win", float),
                 ("lose", float),
@@ -178,41 +134,41 @@ class DP_solver:
 
         def get_total_prob(inds):
             v = np.full(self.prob_if_stand.shape, np.nan)
-            for i in range(self.N_hands):
+            for i in range(self.hands.len):
                 for j in range(self.deck.len):
                     if not any(np.isnan(self.prob_dealer_stand_at[i, j])):
                         k = self.prob_dealer_stand_at[i, j, inds[i] :]
                         v[i][j] = np.sum(k, axis=-1)
             return v
 
-        val = self.hand_scores - self.dealer_target
+        val = self.hands.scores - self.dealer_target
         self.prob_if_stand["win"] = 1 - get_total_prob(
-            np.where(self.hand_scores > self.dealer_target, val, 0)
+            np.where(self.hands.scores > self.dealer_target, val, 0)
         )
         self.prob_if_stand["lose"] = get_total_prob(
-            np.where(self.hand_scores < self.dealer_target, 0, val + 1)
+            np.where(self.hands.scores < self.dealer_target, 0, val + 1)
         )
         return
 
     def optimal_policy(self):
-        self.policy = np.zeros((self.N_hands, self.deck.len), dtype=np.uint8)
+        self.policy = np.zeros((self.hands.len, self.deck.len), dtype=np.uint8)
         self.EV = np.zeros(self.policy.shape)
-        for h in range(self.N_hands - 1, -1, -1):
+        for h in range(self.hands.len - 1, -1, -1):
             hand = self.hands[h]
             EV_stand = (
                 self.prob_if_stand["win"][h] - self.prob_if_stand["lose"][h]
             )
-            if not self.T[h]:
+            if not self.hands.futures[h]:
                 self.EV[h] = EV_stand
                 continue
             for dealer_card in range(self.deck.len):
                 cards_left = self.deck - hand
                 if cards_left[dealer_card]:
                     cards_left[dealer_card] -= 1
-                    num_cards = self.deck.sum - self.N_cards_in_hand[h] - 1
+                    num_cards = self.deck.sum - self.hands.sum[h] - 1
                     EV_hit = 0
                     total_prob = 0
-                    for nxt, card_drawn in self.T[h]:
+                    for nxt, card_drawn in self.hands.futures[h]:
                         if cards_left[card_drawn]:
                             prob = cards_left[card_drawn] / num_cards
                             total_prob += prob
@@ -232,7 +188,7 @@ class DP_solver:
         cond1 = np.logical_not(np.all(self.policy, axis=-1))
         cond2 = False
         for t in ops["totals"]:
-            cond2 = np.logical_or(cond2, self.N_cards_in_hand == t)
+            cond2 = np.logical_or(cond2, self.hands.sum == t)
         inds = np.nonzero(np.logical_and(cond1, cond2))
 
         charmap = {i: str(i + 1) for i in range(self.deck.len)}
@@ -306,6 +262,53 @@ class DP_solver:
 
             fig.savefig("optimal_policy.png")
 
+        return
+
+
+class Deck(np.ndarray):
+    def __new__(cls, deck):
+        instance = np.array(deck, dtype=np.uint8).view(cls)
+        instance.sum = np.sum(instance)
+        instance.len = len(instance)
+        return instance
+
+
+Future = namedtuple("Future", ["hand_index", "card"])
+
+
+class Hands(np.ndarray):
+
+    def __new__(cls, futures):
+        hands = sorted(futures.keys(), key=lambda x: sum(x))
+        htoi = {h: i for i, h in enumerate(hands)}
+        instance = np.array(hands, dtype=np.uint8).view(cls)
+        instance.futures = [
+            [Future(htoi[dest], card) for dest, card in futures[hand]]
+            for hand in hands
+        ]
+        instance.len = len(instance)
+        instance.sum = np.sum(instance, axis=-1, dtype=np.uint8)
+        return instance
+
+    def get_scores(self, blackjack, ace_plus):
+        card_vals = np.arange(1, len(self[0]) + 1, dtype=np.uint8)
+        V = self @ card_vals
+        Vp = V + ace_plus
+        self.scores = np.where(
+            np.logical_and(self[:, 0], Vp <= blackjack), Vp, V
+        )
+        return
+
+    def get_dealer_paths(self, dealer_target):
+        self.dealer_paths = np.zeros_like(self, dtype=np.uint8)
+        for nxt, card in self.futures[0]:
+            self.dealer_paths[nxt, card] = 1
+
+        for h in range(1, self.len):
+            if self.scores[h] >= dealer_target:
+                continue
+            for nxt, _ in self.futures[h]:
+                self.dealer_paths[nxt] += self.dealer_paths[h]
         return
 
 
