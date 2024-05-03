@@ -9,13 +9,17 @@ from tabulate import tabulate
 
 def main():
 
-    ops = {
-        "deck": 9 * [4] + [16],
-        "blackjack": 21,
-        "dealer_target": 17,
-        "ace_plus": 10,
-        "surrender": True,
-    }
+    ops = dict(
+        deck=[4] * 9 + [16],
+        blackjack=21,
+        ace_plus=10,
+        surrender=True,
+        dealer=Dealer(
+            target=17,
+            peeks=False, # NotImplemented
+            hit_soft_target=False, # NotImplemented
+        ),
+    )
 
     print_ops = {
         "totals": (0, 2),
@@ -29,7 +33,7 @@ def main():
     solver = DP_solver(**ops)
     solver.valid_hands()
     solver.hands.get_scores(solver.blackjack, solver.ace_plus)
-    solver.hands.get_dealer_paths(solver.dealer_target)
+    solver.dealer.get_paths(solver.hands)
     solver.dealer_stand_probability()
     solver.stand_value()
     solver.optimal_policy()
@@ -78,13 +82,13 @@ class DP_solver:
 
     def dealer_stand_probability(self):
         deck_left_for_dealer = self.deck - self.hands
-        stand_scores = self.blackjack - self.dealer_target + 1
+        stand_scores = self.blackjack - self.dealer.target + 1
         self.prob_dealer_stand_at = np.zeros(
             (self.hands.len, self.deck.len, stand_scores)
         )
         valid_dealer_hands = np.logical_and(
-            np.any(self.hands.dealer_paths, axis=-1),
-            self.hands.scores >= self.dealer_target,
+            np.any(self.dealer.paths, axis=-1),
+            self.hands.scores >= self.dealer.target,
         ).nonzero()[0]
         for h in valid_dealer_hands:
             N_cards_left_for_dealer = self.deck.sum - self.hands.sum - 1
@@ -103,7 +107,7 @@ class DP_solver:
                 0,
             )
             prob = np.tile(
-                self.hands.dealer_paths[h].astype(float),
+                self.dealer.paths[h].astype(float),
                 (self.hands.len, 1),
             )
             for fc in cards_to_draw:
@@ -120,7 +124,7 @@ class DP_solver:
                     * denominator
                 )
             self.prob_dealer_stand_at[
-                :, :, self.hands.scores[h] - self.dealer_target
+                :, :, self.hands.scores[h] - self.dealer.target
             ] += prob
         return
 
@@ -142,12 +146,12 @@ class DP_solver:
                         v[i][j] = np.sum(k, axis=-1)
             return v
 
-        val = self.hands.scores - self.dealer_target
+        val = self.hands.scores - self.dealer.target
         self.prob_if_stand["win"] = 1 - get_total_prob(
-            np.where(self.hands.scores > self.dealer_target, val, 0)
+            np.where(self.hands.scores > self.dealer.target, val, 0)
         )
         self.prob_if_stand["lose"] = get_total_prob(
-            np.where(self.hands.scores < self.dealer_target, 0, val + 1)
+            np.where(self.hands.scores < self.dealer.target, 0, val + 1)
         )
         return
 
@@ -223,7 +227,7 @@ class DP_solver:
             target = ops["dealer_stand_prob"][1]
             prob_dealer = self.prob_dealer_stand_at[inds]
             prob_dealer = (
-                prob_dealer[:, :, target - self.dealer_target]
+                prob_dealer[:, :, target - self.dealer.target]
                 .astype(float)
                 .tolist()
             )
@@ -309,16 +313,25 @@ class Hands(np.ndarray):
         )
         return
 
-    def get_dealer_paths(self, dealer_target):
-        self.dealer_paths = np.zeros_like(self, dtype=np.uint8)
-        for nxt, card in self.futures[0]:
-            self.dealer_paths[nxt, card] = 1
 
-        for h in range(1, self.len):
-            if self.scores[h] >= dealer_target:
+class Dealer:
+    def __init__(self, target, peeks, hit_soft_target):
+        self.target = target
+        self.peeks = peeks
+        self.hit_soft = hit_soft_target
+        self.paths = None
+        return
+
+    def get_paths(self, hands):
+        self.paths = np.zeros_like(hands, dtype=np.uint8)
+        for nxt, card in hands.futures[0]:
+            self.paths[nxt, card] = 1
+
+        for h in range(1, hands.len):
+            if hands.scores[h] >= self.target:
                 continue
-            for nxt, _ in self.futures[h]:
-                self.dealer_paths[nxt] += self.dealer_paths[h]
+            for nxt, _ in hands.futures[h]:
+                self.paths[nxt] += self.paths[h]
         return
 
 
