@@ -14,6 +14,7 @@ def main():
         "blackjack": 21,
         "dealer_target": 17,
         "ace_plus": 10,
+        "surrender": True,
     }
 
     print_ops = {
@@ -179,6 +180,15 @@ class DP_solver:
                         self.EV[h, dealer_card] = EV_hit
                     else:
                         self.EV[h, dealer_card] = EV_stand[dealer_card]
+
+                    # Surrender
+                    if (
+                        self.surrender
+                        and self.hands.sum[h] == 2
+                        and self.EV[h, dealer_card] < -0.5
+                    ):
+                        self.policy[h, dealer_card] = 2
+                        self.EV[h, dealer_card] = -0.5
                 else:
                     self.EV[h, dealer_card] = np.nan
         return
@@ -237,12 +247,12 @@ class DP_solver:
         print("\nGame EV:", game_EV)
 
         if ops["plot"]:
-            strmap = {0: "S", 1: "H"}
-            clrmap = {0: "black", 1: "white"}
-            fig, ax = plt.subplots(1, 1, figsize=(4, 8))
+            strmap = {0: "S", 1: "H", 2: "U"}
+            clrmap = {0: "black", 1: "white", 2: "white"}
+            fig, ax = plt.subplots(1, 1, figsize=(3.5, 8))
             ax.imshow(self.policy[inds], cmap="binary")
 
-            ax.set_title("Optimal Policy (Hit or Stand?)")
+            ax.set_title("Optimal Policy")
             ax.set_xlabel("Dealer Card")
             ax.set_ylabel("Player Hand")
             ax.set_xticks(np.arange(self.deck.len))
