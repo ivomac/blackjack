@@ -5,7 +5,7 @@ A Blackjack solver. The player's hand composition is considered, not only the to
 
 - Deck (default: standard single deck)
 - Blackjack amount (default: $B=21$)
-- Dealer's target (or lowest amount to stand on) (default: $T=17$)
+- Dealer's target (or lowest amount to stand on) (default: $T=17$).
 - Ace alternate extra value. Base value is 1. (default: 10)
 
 The dealer always stands on reaching soft score $T$.
