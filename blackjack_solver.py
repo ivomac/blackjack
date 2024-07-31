@@ -1,94 +1,101 @@
 #!/usr/bin/python
 
-from collections import deque
+from collections import deque, namedtuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from tabulate import tabulate
+import tabulate
 
 BASEDECK = [4] * 9 + [16]
 BLACKJACK = 21
 ACE_PLUS = 10
 
-PLAYER_OPTS = dict(
-    split=False,  # NotImplemented
-    double=False,  # NotImplemented
-    surrender=True,
-)
+PLAYER_OPTS = {
+    "split": False,
+    "double": False,
+    "surrender": True,
+}
 
-DEALER_OPTS = dict(
-    target=17,
-    peeks=False,  # NotImplemented
-    hit_soft_target=False,  # NotImplemented
-)
+DEALER_OPTS = {
+    "target": 17,
+    "peeks": False,  # NotImplemented
+    "hit_soft_target": False,  # NotImplemented
+}
 
-LOG_OPTS = dict(
-    totals=(0, 2),
-    dealer_stand_prob=(False, 21),
-    stand_win_prob=False,
-    optimal_policy=True,
-    floatfmt=".4f",
-    plot=True,
-)
+LOG_OPTS = {
+    "totals": (0, 2),
+    "dealer_stand_prob": (False, 21),
+    "stand_win_prob": False,
+    "optimal_policy": True,
+    "floatfmt": ".4f",
+    "plot": True,
+}
 
 
 class Solver:
-    def __init__(self):
+    """Optimal policy solver."""
+
+    def __init__(self) -> None:
         self.policy = None
         self.values = None
-        self.EV = None
+        self.exp_val = None
 
     def optimal_policy(self):
+        """Solve for optimal policy."""
         self.policy = np.zeros((HANDS.len, DECK.len), dtype=np.uint8)
-        self.EV = np.zeros(self.policy.shape)
+        self.exp_val = np.zeros(self.policy.shape)
         for h in range(HANDS.len - 1, -1, -1):
             hand = HANDS[h]
-            EV_stand = (
+            exp_val_stand = (
                 PLAYER.prob_if_stand["win"][h] - PLAYER.prob_if_stand["lose"][h]
             )
             if not DRAWS[h]:
-                self.EV[h] = EV_stand
+                self.exp_val[h] = exp_val_stand
                 continue
             for dealer_card in range(DECK.len):
                 cards_left = DECK - hand
                 if cards_left[dealer_card]:
                     cards_left[dealer_card] -= 1
                     num_cards = DECK.sum - HANDS.sum[h] - 1
-                    EV_hit = 0
+                    exp_val_hit = 0
                     total_prob = 0
                     for nxt, card_drawn in DRAWS[h]:
                         if cards_left[card_drawn]:
                             prob = cards_left[card_drawn] / num_cards
                             total_prob += prob
-                            EV_hit += self.EV[nxt][dealer_card] * prob
-                    EV_hit -= 1 - total_prob
-                    if EV_hit > EV_stand[dealer_card]:
+                            exp_val_hit += self.exp_val[nxt][dealer_card] * prob
+                    exp_val_hit -= 1 - total_prob
+                    if exp_val_hit > exp_val_stand[dealer_card]:
                         self.policy[h, dealer_card] = 1
-                        self.EV[h, dealer_card] = EV_hit
+                        self.exp_val[h, dealer_card] = exp_val_hit
                     else:
-                        self.EV[h, dealer_card] = EV_stand[dealer_card]
+                        self.exp_val[h, dealer_card] = exp_val_stand[dealer_card]
 
                     if HANDS.sum[h] == 2:
                         # Surrender
                         if (
                             PLAYER.options.surrender
-                            and self.EV[h, dealer_card] < -0.5
+                            and self.exp_val[h, dealer_card] < -0.5
                         ):
                             self.policy[h, dealer_card] = 2
-                            self.EV[h, dealer_card] = -0.5
+                            self.exp_val[h, dealer_card] = -0.5
                 else:
-                    self.EV[h, dealer_card] = np.nan
-        return
+                    self.exp_val[h, dealer_card] = np.nan
 
 
 class Deck(np.ndarray):
+    """Deck of cards"""
+
     def __new__(cls):
-        instance = np.array(BASEDECK, dtype=np.uint8).view(cls)
-        instance.sum = np.sum(instance)
-        instance.len = len(instance)
-        return instance
+        return np.array(BASEDECK, dtype=np.uint8).view(cls)
+
+    def __init__(self):
+        self.htoi = None
+        self.len = len(self)
+        self.sum = np.sum(self)
 
     def get_hands_and_draws(self):
+        """Get all possible hands and draws"""
         draws = dict()
         q = deque()
 
@@ -111,7 +118,7 @@ class Deck(np.ndarray):
                 card += 1
                 min_score += 1
 
-        hands = Hands(draws.keys())
+        hands = Hands(*sorted_hands(draws.keys()))
         draws = [
             [(hands.htoi[dest], card) for dest, card in draws[tuple(hand)]]
             for hand in hands
@@ -119,32 +126,39 @@ class Deck(np.ndarray):
         return hands, draws
 
 
-class Hands(np.ndarray):
+def sorted_hands(hands):
+    hands = sorted(hands, key=lambda x: sum(x))
+    htoi = {h: i for i, h in enumerate(hands)}
+    return hands, htoi
 
-    def __new__(cls, hands):
-        hands = sorted(hands, key=lambda x: sum(x))
-        htoi = {h: i for i, h in enumerate(hands)}
-        instance = np.array(hands, dtype=np.uint8).view(cls)
-        instance.htoi = htoi
-        instance.len = len(instance)
-        instance.sum = np.sum(instance, axis=-1, dtype=np.uint8)
-        return instance
+
+class Hands(np.ndarray):
+    def __new__(cls, hands, _):
+        return np.array(hands, dtype=np.uint8).view(cls)
+
+    def __init__(self, _, htoi):
+        self.htoi = htoi
+        self.len = len(self)
+        self.sum = np.sum(self, axis=-1, dtype=np.uint8)
 
     def get_scores(self):
         card_vals = np.arange(1, len(self[0]) + 1, dtype=np.uint8)
-        V = self @ card_vals
-        Vp = V + ACE_PLUS
+        scores = self @ card_vals
+        scores_plus = scores + ACE_PLUS
         self.scores = np.where(
-            np.logical_and(self[:, 0], Vp <= BLACKJACK), Vp, V
+            np.logical_and(self[:, 0], scores_plus <= BLACKJACK),
+            scores_plus,
+            scores,
         )
-        return
+
+
+PlayerOptions = namedtuple("PlayerOptions", ["split", "double", "surrender"])
 
 
 class Player:
     def __init__(self, **options):
         self.options = PlayerOptions(**options)
         self.prob_if_stand = None
-        return
 
     def get_stand_value(self):
         self.prob_if_stand = np.zeros(
@@ -171,15 +185,6 @@ class Player:
         self.prob_if_stand["lose"] = get_total_prob(
             np.where(HANDS.scores < DEALER.target, 0, val + 1)
         )
-        return
-
-
-class PlayerOptions:
-    def __init__(self, split, double, surrender):
-        self.split = split
-        self.double = double
-        self.surrender = surrender
-        return
 
 
 class Dealer:
@@ -187,10 +192,10 @@ class Dealer:
         self.target = target
         self.peeks = peeks
         self.hit_soft = hit_soft_target
+
         self.paths = None
         self.inds_stand_hands = None
         self.prob_stand = None
-        return
 
     def get_paths(self):
         self.paths = np.zeros_like(HANDS, dtype=np.uint8)
@@ -200,9 +205,8 @@ class Dealer:
         for h in range(1, HANDS.len):
             if HANDS.scores[h] >= self.target:
                 continue
-            for nxt, _ in DRAWS[h]:
+            for nxt, card in DRAWS[h]:
                 self.paths[nxt] += self.paths[h]
-        return
 
     def get_stand_hands(self):
         self.inds_stand_hands = np.logical_and(
@@ -211,20 +215,17 @@ class Dealer:
         ).nonzero()[0]
 
     def get_stand_probability(self):
-        deck_left_for_dealer = DECK - HANDS
+        deck_left = DECK - HANDS
         stand_scores = BLACKJACK - self.target + 1
         self.prob_stand = np.zeros((HANDS.len, DECK.len, stand_scores))
         for h in self.inds_stand_hands:
-            N_cards_left_for_dealer = DECK.sum - HANDS.sum - 1
+            num_cards_left = DECK.sum - HANDS.sum - 1
             cards_to_draw = np.nonzero(HANDS[h])[0]
             denominator = np.where(
-                np.all(deck_left_for_dealer >= HANDS[h], axis=-1),
+                np.all(deck_left >= HANDS[h], axis=-1),
                 1
                 / np.prod(
-                    [
-                        N_cards_left_for_dealer - i
-                        for i in range(HANDS.sum[h] - 1)
-                    ],
+                    [num_cards_left - i for i in range(HANDS.sum[h] - 1)],
                     axis=0,
                     dtype=float,
                 ),
@@ -238,7 +239,7 @@ class Dealer:
                 prob[:, fc] *= (
                     np.prod(
                         [
-                            deck_left_for_dealer[:, c] - i
+                            deck_left[:, c] - i
                             for c in cards_to_draw
                             for i in np.arange(c == fc, HANDS[h, c])
                         ],
@@ -248,7 +249,6 @@ class Dealer:
                     * denominator
                 )
             self.prob_stand[:, :, HANDS.scores[h] - self.target] += prob
-        return
 
 
 def log():
@@ -266,13 +266,12 @@ def log():
 
     hands = HANDS[inds]
     hands = [
-        ["".join([charmap[i] * c for i, c in enumerate(hand) if c])]
-        for hand in hands
+        ["".join([charmap[i] * c for i, c in enumerate(hand) if c])] for hand in hands
     ]
     headers = ["hand"] + [charmap[i] for i in range(DECK.len)]
 
     def Tabulate(arr):
-        return tabulate(
+        return tabulate.tabulate(
             [hands[i] + k for i, k in enumerate(arr)],
             headers=headers,
             floatfmt=ops["floatfmt"],
@@ -281,9 +280,7 @@ def log():
     if ops["dealer_stand_prob"][0]:
         target = ops["dealer_stand_prob"][1]
         prob_dealer = DEALER.prob_stand[inds]
-        prob_dealer = (
-            prob_dealer[:, :, target - DEALER.target].astype(float).tolist()
-        )
+        prob_dealer = prob_dealer[:, :, target - DEALER.target].astype(float).tolist()
         print(f"Dealer prob to stand at {target} (PLAYER hand vs. dealer card)")
         print(Tabulate(prob_dealer))
 
@@ -298,8 +295,8 @@ def log():
         print("1=Hit  0=Stand")
         print(Tabulate(pol))
 
-    game_EV = (SOLVER.EV[0] @ DECK) / DECK.sum
-    print("\nGame EV:", game_EV)
+    game_exp_val = (SOLVER.exp_val[0] @ DECK) / DECK.sum
+    print("\nGame EV:", game_exp_val)
 
     if ops["plot"]:
         strmap = {0: "S", 1: "H", 2: "U"}
@@ -326,8 +323,6 @@ def log():
                 )
 
         fig.savefig("optimal_policy.png")
-
-    return
 
 
 SOLVER = Solver()

@@ -1,22 +1,21 @@
 
-A Blackjack solver. The player's hand composition is considered, not only the total sum.
+A Blackjack solver. The player's full hand composition is considered, not only the total sum.
 
 ### Parameters
 
 - Deck (default: standard single deck)
 - Blackjack amount (default: $B=21$)
-- Dealer's target (or lowest amount to stand on) (default: $T=17$)
+- Dealer's target (or lowest amount to stand on) (default: $T=17$).
 - Ace alternate extra value. Base value is 1. (default: 10)
 
-The dealer always stands on reaching soft score $T$.
+The dealer always stands on reaching soft target $T$.
 
 ### Todo
 
 - Add double down
-- Add surrender
 - Add split
 - Add option for dealer to peek for blackjack
-- Add option for dealer to hit at soft 17
+- Add option for dealer to hit when reaching soft target
 
 ### Blackjack solver - rough outline
 
@@ -42,7 +41,9 @@ where $S(h)$ is the score or sum value of hand $h$.
 
 ### Solutions
 
-Base parameters: $EV = -0.04246$. Hit on all two-card hands not shown.
+For base parameters:
+
+$EV = -0.04246$. "H" is hit. "S" is stand". "U" is surrender. For two-card hands not shown, the strategy is always to hit.
 
 <img src="./optimal_policy.png" width="350">
 
